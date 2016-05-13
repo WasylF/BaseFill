@@ -32,6 +32,9 @@ class String
 end
 
 class MatchTranslation
+
+  @bad_translation = 'bad translation'
+
   def initialize(eng_sentence, rus_sentence)
     eng_sentence.downcase!
     rus_sentence.downcase!
@@ -60,6 +63,11 @@ class MatchTranslation
 
     @rus_infinitives= get_infinitives(@rus_sentence)
     @rus_sentence = delete_endings(@rus_sentence)
+
+    @all_translations= {}
+    @eng_sentence.each { |eng_word|
+      @all_translations[eng_word]= translate(eng_word)
+    }
   end
 
 
@@ -104,6 +112,24 @@ class MatchTranslation
     without_endings
   end
 
+  def delete_ending(word)
+    word_size = word.size
+    if word_size <= 3
+      puts "word: #{word}, size: #{word_size}"
+      return word
+    else
+      3.downto(1).each { |i|
+        ending = word.last(i)
+        if @rus_endings.include?(ending)
+          puts "word: #{word}, ending: #{ending}"
+          return word[0, word_size - i]
+        end
+      }
+    end
+
+    word
+  end
+
 
   def levenshtein_distance(s, t)
     m = s.length
@@ -144,7 +170,7 @@ class MatchTranslation
 
 
   def get_probability(eng_word)
-    translations = delete_endings(translate(eng_word))
+    translations = delete_endings(@all_translations[eng_word])
 
     puts "Translations without endings:"
     puts translations.join(", ")
@@ -169,6 +195,28 @@ class MatchTranslation
   end
 
 
+  def get_best_translation(eng_word)
+    translations = @all_translations[eng_word]
+
+    rus_size= @rus_sentence.length - 1
+    best= ""
+    p_best= -1
+    (0..rus_size).each { |i|
+      if !@used_rus[i]
+        sentence_word= @rus_sentence[i]
+        translations.each do |translation|
+          p = calc_probability(sentence_word, delete_ending(translation))
+          if p > p_best
+            p_best= p
+            best= translation
+          end
+        end
+      end
+    }
+
+    p_best > 0.5 ? best : @bad_translation
+  end
+
   def translate(eng_word) # here call to Max's ending code
     # this is stub method
     case eng_word
@@ -184,6 +232,7 @@ class MatchTranslation
         return []
     end
   end
+
 
   def get_infinitives(rus_words)
     shell_output = ""
@@ -212,10 +261,9 @@ class MatchTranslation
   def match_words
     eng_size= @eng_sentence.length - 1
 
-
     (0..eng_size).each { |eng_index|
       eng_word= @eng_sentence[eng_index]
-      translations= translate(eng_word)
+      translations= @all_translations[eng_word]
       translations.each { |translation|
         rus_index= matches_infinitive(translation)
         if rus_index >= 0
@@ -225,6 +273,7 @@ class MatchTranslation
       }
     }
   end
+
 
   def matches_infinitive(translation)
     rus_size= @rus_infinitives.length - 1
@@ -242,6 +291,7 @@ class MatchTranslation
     return -1
   end
 
+
   def process_sentences
     match_words
     result= {}
@@ -251,6 +301,11 @@ class MatchTranslation
       if @used_eng[eng_index]
         @translation_eng_to_rus[eng_index].force_encoding(Encoding::UTF_8)
         result[@eng_sentence[eng_index]]= @translation_eng_to_rus[eng_index]
+      else
+        translation= get_best_translation(@eng_sentence[eng_index])
+        if translation!=@bad_translation
+          result[@eng_sentence[eng_index]]= translation
+        end
       end
     }
 
