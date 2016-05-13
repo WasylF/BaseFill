@@ -33,8 +33,12 @@ end
 
 class MatchTranslation
 
-  @bad_translation = 'bad translation'
+  BAD_TRANSLATION = 'bad translation'
+  MIN_PROBABILITY = 0.7 #minimum probability for right translation
 
+  # constructor
+  # eng_sentence - english sentence from Excel
+  # rus_sentence - russian sentence from Excel
   def initialize(eng_sentence, rus_sentence)
     eng_sentence.downcase!
     rus_sentence.downcase!
@@ -53,9 +57,6 @@ class MatchTranslation
 
     delete_useless!
 
-    puts "eng_sentence: #{@eng_sentence.join(", ")}"
-    puts "rus_sentence: #{@rus_sentence.join(", ")}"
-
     @used_rus= Array.new(@rus_sentence.length, false)
     @used_eng= Array.new(@eng_sentence.length, false)
 
@@ -71,57 +72,33 @@ class MatchTranslation
   end
 
 
+  # deletes useless words in russian and english sentences
   def delete_useless!
-    new_eng_sentence = @eng_sentence - @useless_eng_words
-    new_rus_sentence = @rus_sentence - @useless_rus_words
-
-    puts "Useless English words: #{(@eng_sentence - new_eng_sentence).join(', ')}"
-    puts "Useless Russian words: #{(@rus_sentence - new_rus_sentence).join(', ')}"
-
-    @eng_sentence = new_eng_sentence
-    @rus_sentence = new_rus_sentence
+    @eng_sentence = @eng_sentence - @useless_eng_words
+    @rus_sentence = @rus_sentence - @useless_rus_words
   end
 
 
+  # deletes endings in russian words (if possible)
   def delete_endings(words)
     without_endings = []
     words.each do |word|
-      word_size = word.size
-      if word_size <= 3
-        puts "word: #{word}, size: #{word_size}"
-        without_endings << word
-      else
-        flag = false
-        3.downto(1).each { |i|
-          ending = word.last(i)
-          if @rus_endings.include?(ending)
-            puts "word: #{word}, ending: #{ending}"
-            without_endings << word[0, word_size - i]
-            flag = true
-            break
-          end
-        }
-        unless flag
-          puts "Ending not found for word: #{word}"
-          without_endings << word
-        end
-      end
+      without_endings << delete_ending(word)
     end
 
-    puts "Added words without endings: #{without_endings.join(', ')}"
     without_endings
   end
 
+
+  # deletes ending in one russian word (if possible)
   def delete_ending(word)
     word_size = word.size
     if word_size <= 3
-      puts "word: #{word}, size: #{word_size}"
       return word
     else
       3.downto(1).each { |i|
         ending = word.last(i)
         if @rus_endings.include?(ending)
-          puts "word: #{word}, ending: #{ending}"
           return word[0, word_size - i]
         end
       }
@@ -131,6 +108,7 @@ class MatchTranslation
   end
 
 
+  # calculates levenshtein distance between words (russian words in our case)
   def levenshtein_distance(s, t)
     m = s.length
     n = t.length
@@ -157,6 +135,7 @@ class MatchTranslation
   end
 
 
+  # calculates probability of right translation
   def calc_probability(actual_word, translation_word)
     d = levenshtein_distance(actual_word, translation_word)
 
@@ -169,38 +148,14 @@ class MatchTranslation
   end
 
 
-  def get_probability(eng_word)
-    translations = delete_endings(@all_translations[eng_word])
-
-    puts "Translations without endings:"
-    puts translations.join(", ")
-    puts
-
-    probability = {}
-
-    @rus_sentence.each { |actual_word|
-      probability[actual_word] = 0.0
-      translations.each do |translation|
-        p = calc_probability(actual_word, translation)
-        puts "probability: #{p}, actual word: #{actual_word}, translation: #{translation}"
-        probability[actual_word] = p if probability[actual_word] < p
-      end
-    }
-
-    puts
-    puts "Probability for translations of word \"#{eng_word}\":"
-    probability.each { |key, value| puts "#{key}: #{value.round(3)}" }
-
-    probability
-  end
-
-
+  # returns best translation for eng_word
   def get_best_translation(eng_word)
     translations = @all_translations[eng_word]
 
     rus_size= @rus_sentence.length - 1
     best= ""
     p_best= -1
+    rus_index= -1
     (0..rus_size).each { |i|
       if !@used_rus[i]
         sentence_word= @rus_sentence[i]
@@ -209,14 +164,21 @@ class MatchTranslation
           if p > p_best
             p_best= p
             best= translation
+            rus_index= i
           end
         end
       end
     }
 
-    p_best > 0.5 ? best : @bad_translation
+    if p_best > MIN_PROBABILITY
+      @used_rus[rus_index]= true
+      return best
+    end
+    BAD_TRANSLATION
   end
 
+
+  # returns translations of eng_word (from multitran)
   def translate(eng_word) # here call to Max's ending code
     # this is stub method
     case eng_word
@@ -234,6 +196,7 @@ class MatchTranslation
   end
 
 
+  # returns infinitives of rus_words (from yandex's tool)
   def get_infinitives(rus_words)
     shell_output = ""
     IO.popen('mystem.exe -nl', 'r+') do |pipe|
@@ -258,7 +221,9 @@ class MatchTranslation
   end
 
 
-  def match_words
+  # matches eng words to russian if one of translation is an infinitive of some russian word
+  # result stored in @translation_eng_to_rus field
+  def match_words_yandex
     eng_size= @eng_sentence.length - 1
 
     (0..eng_size).each { |eng_index|
@@ -274,7 +239,8 @@ class MatchTranslation
     }
   end
 
-
+  # return index of russian word in sentence if translation matches to it infinitive,
+  # -1 otherwise
   def matches_infinitive(translation)
     rus_size= @rus_infinitives.length - 1
 
@@ -292,8 +258,10 @@ class MatchTranslation
   end
 
 
+  # try to match every english word from sentence to one russian word
+  # return hash{key:"eng word", value: "russian infinitive (from multitran)"}
   def process_sentences
-    match_words
+    match_words_yandex
     result= {}
     eng_size= @eng_sentence.length - 1
 
@@ -303,7 +271,8 @@ class MatchTranslation
         result[@eng_sentence[eng_index]]= @translation_eng_to_rus[eng_index]
       else
         translation= get_best_translation(@eng_sentence[eng_index])
-        if translation!=@bad_translation
+        if translation != BAD_TRANSLATION
+          @used_eng[eng_index]= true
           result[@eng_sentence[eng_index]]= translation
         end
       end
@@ -316,33 +285,5 @@ end
 
 
 my_translation = MatchTranslation.new("People are walking on the street", "Люди гуляют на улице")
-puts "probability:"
-puts my_translation.calc_probability("улиц", "умниц")
-puts my_translation.calc_probability("бежать", "бегут")
-puts my_translation.calc_probability("беж", "бег")
-
-
-puts "probability for all words"
-hash = my_translation.get_probability("street")
-hash.each { |key, value| puts "word: #{key} probability: #{value}" }
-
-infinitives= my_translation.get_infinitives(%w(Машины люди телефончик компьютеров дорогам прибежавший))
-
-infinitives.each { |infinitive|
-  puts "inf:"
-  infinitive.each { |inf| puts inf }
-}
-
-infinitives= my_translation.get_infinitives(%w(Люди гуляют улице))
-
-infinitives.each { |infinitive|
-  puts "inf:"
-  infinitive.each { |inf| puts inf }
-}
-
-puts '#######################################'
-puts '#######################################'
-puts '#######################################'
-
 matches= my_translation.process_sentences
-matches.each { |key, value| puts "eng_word: #{key}, rus_word: #{value}" }
+matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
