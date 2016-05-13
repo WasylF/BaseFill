@@ -36,16 +36,29 @@ class MatchTranslation
     eng_sentence.downcase!
     rus_sentence.downcase!
 
+    eng_sentence.force_encoding(Encoding::UTF_8)
+    rus_sentence.force_encoding(Encoding::UTF_8)
+
     @eng_sentence = eng_sentence.split(' ')
     @rus_sentence = rus_sentence.split(' ')
 
     # TODO: add words
-    @useless_eng_words= %w(a the an on in by)
+    @useless_eng_words= %w(a the an on in by is are am were was be been have has had)
     @useless_rus_words= %w(а б бы в во на)
 
     @rus_endings = %w(am ax cm ex а ам ами ас ая е ев ей ем еми емя ею её и ие ий им ими ит ите их ишь ию ия иям иями иях м ми мя о ов ого ое ой ом ому ою оё у ум умя ут ух ую ют шь ю я ям ями ях ёй ёт ёте ёх ёшь)
 
     delete_useless!
+
+    puts "eng_sentence: #{@eng_sentence.join(", ")}"
+    puts "rus_sentence: #{@rus_sentence.join(", ")}"
+
+    @used_rus= Array.new(@rus_sentence.length, false)
+    @used_eng= Array.new(@eng_sentence.length, false)
+
+    @translation_eng_to_rus = Array.new(@eng_sentence.length)
+
+    @rus_infinitives= get_infinitives(@rus_sentence)
     @rus_sentence = delete_endings(@rus_sentence)
   end
 
@@ -57,7 +70,7 @@ class MatchTranslation
     puts "Useless English words: #{(@eng_sentence - new_eng_sentence).join(', ')}"
     puts "Useless Russian words: #{(@rus_sentence - new_rus_sentence).join(', ')}"
 
-    @end_sentence = new_eng_sentence
+    @eng_sentence = new_eng_sentence
     @rus_sentence = new_rus_sentence
   end
 
@@ -162,11 +175,11 @@ class MatchTranslation
       when 'street'
         return %w(улица ул стрит дорожка след проход коридор)
       when 'people'
-        return %w(нация население жители родители люди родные свита команда рабы народ)
+        return %w(нациянаселение жители родители люди родные свита команда рабы народ)
       when 'are'
         return %w(ар это быть являются находиться происходить случаться)
       when 'walking'
-        return %w(ходьба походка хождение гулянье пробежка движение обход)
+        return %w(ходьба походка хождение гулянье пробежка движение обход гулять)
       else
         return []
     end
@@ -183,8 +196,65 @@ class MatchTranslation
       shell_output = pipe.read
     end
 
-    infinitives= shell_output.split("\n")
+    shell_output.force_encoding(Encoding::UTF_8)
+
+    result= shell_output.split("\n")
+    i= 0
+    infinitives= Array.new(@rus_sentence.length) { Array.new(0) }
+    result.each { |inf|
+      infinitives[i]= inf.split('|')
+      i+= 1
+    }
     return infinitives
+  end
+
+
+  def match_words
+    eng_size= @eng_sentence.length - 1
+
+
+    (0..eng_size).each { |eng_index|
+      eng_word= @eng_sentence[eng_index]
+      translations= translate(eng_word)
+      translations.each { |translation|
+        rus_index= matches_infinitive(translation)
+        if rus_index >= 0
+          @used_eng[eng_index]= true
+          @translation_eng_to_rus[eng_index]= translation
+        end
+      }
+    }
+  end
+
+  def matches_infinitive(translation)
+    rus_size= @rus_infinitives.length - 1
+
+    translation.force_encoding(Encoding::UTF_8)
+    (0..rus_size).each { |i|
+      if !@used_rus[i]
+        if @rus_infinitives[i].include?(translation)
+          @used_rus[i]= true
+          return i
+        end
+      end
+    }
+
+    return -1
+  end
+
+  def process_sentences
+    match_words
+    result= {}
+    eng_size= @eng_sentence.length - 1
+
+    (0..eng_size).each { |eng_index|
+      if @used_eng[eng_index]
+        @translation_eng_to_rus[eng_index].force_encoding(Encoding::UTF_8)
+        result[@eng_sentence[eng_index]]= @translation_eng_to_rus[eng_index]
+      end
+    }
+
+    result
   end
 
 end
@@ -204,5 +274,20 @@ hash.each { |key, value| puts "word: #{key} probability: #{value}" }
 infinitives= my_translation.get_infinitives(%w(Машины люди телефончик компьютеров дорогам прибежавший))
 
 infinitives.each { |infinitive|
-  puts "inf: #{infinitive}"
+  puts "inf:"
+  infinitive.each { |inf| puts inf }
 }
+
+infinitives= my_translation.get_infinitives(%w(Люди гуляют улице))
+
+infinitives.each { |infinitive|
+  puts "inf:"
+  infinitive.each { |inf| puts inf }
+}
+
+puts '#######################################'
+puts '#######################################'
+puts '#######################################'
+
+matches= my_translation.process_sentences
+matches.each { |key, value| puts "eng_word: #{key}, rus_word: #{value}" }
