@@ -172,6 +172,21 @@ class MatchTranslation
     end
   end
 
+  def get_infinitives(rus_words)
+    shell_output = ""
+    IO.popen('mystem.exe -nl', 'r+') do |pipe|
+      rus_words.each { |word|
+        pipe.puts (word)
+      }
+      pipe.close_write
+
+      shell_output = pipe.read
+    end
+
+    infinitives= shell_output.split("\n")
+    return infinitives
+  end
+
 end
 
 
@@ -184,4 +199,10 @@ puts my_translation.calc_probability("беж", "бег")
 
 puts "probability for all words"
 hash = my_translation.get_probability("street")
-hash.each { |key, value| puts "p: #{key} word: #{value}" }
+hash.each { |key, value| puts "word: #{key} probability: #{value}" }
+
+infinitives= my_translation.get_infinitives(%w(Машины люди телефончик компьютеров дорогам прибежавший))
+
+infinitives.each { |infinitive|
+  puts "inf: #{infinitive}"
+}
