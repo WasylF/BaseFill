@@ -34,6 +34,8 @@ class String
   end
 end
 
+Translation = Struct.new(:rus_index, :translation)
+
 class MatchTranslation
 
   BAD_TRANSLATION = 'bad translation'
@@ -57,8 +59,8 @@ class MatchTranslation
     # @rus_sentence = rus_sentence.split(' ')
 
     # TODO: add words
-    @useless_eng_words = %w(a the an on in by is are am were was be been have has had)
-    @useless_rus_words = %w(а б бы в во на)
+    @useless_eng_words = %w(a the an on in by is are am were was be been have has had to i you he she it we they)
+    @useless_rus_words = %w(а б бы в во на я ты он она оно мы вы они)
 
     @rus_endings = %w(am ax cm ex а ам ами ас ая е ев ей ем еми емя ею её и ие ий им ими ит ите их ишь ию ия иям иями иях м ми мя о ов ого ое ой ом ому ою оё у ум умя ут ух ую ют шь ю я ям ями ях ёй ёт ёте ёх ёшь)
 
@@ -149,8 +151,8 @@ class MatchTranslation
     #puts "distance: #{d}"
     #puts "length: #{actual_word.size}"
     #puts "p: #{d * 1.0 / actual_word.size}"
-
-    p = d == 0 ? 1.0 : 1.0 - d * 1.0 / actual_word.size
+    min_leng= actual_word.size < translation_word.size ? actual_word.size : translation_word.size
+    p = 1.0 - d * 1.0 / min_leng
     p < 0 ? 0.0 : p
   end
 
@@ -219,36 +221,50 @@ class MatchTranslation
   # result stored in @translation_eng_to_rus field
   def match_words_yandex
     eng_size= @eng_sentence.length - 1
+    collision= false
+    updated= false
 
     (0..eng_size).each { |eng_index|
-      eng_word= @eng_sentence[eng_index]
-      translations= @all_translations[eng_word]
-      translations.each { |translation|
-        rus_index= matches_infinitive(translation)
-        if rus_index >= 0
+      if !@used_eng[eng_index]
+        eng_word= @eng_sentence[eng_index]
+        translations= @all_translations[eng_word]
+        rus_indexes= []
+        translations.each { |translation|
+          rus_indexes+= matches_infinitives(translation)
+        }
+        rus_indexes.uniq!
+        if rus_indexes.size == 1
+          updated= true
           @used_eng[eng_index]= true
-          @translation_eng_to_rus[eng_index]= translation
+          @used_rus[rus_indexes[0].rus_index]= true
+          @translation_eng_to_rus[eng_index]= rus_indexes[0].translation
+        else
+          collision|= rus_indexes.size > 1
         end
-      }
+      end
     }
+
+    if collision && updated
+      match_words_yandex
+    end
   end
 
-  # return index of russian word in sentence if translation matches to it infinitive,
-  # -1 otherwise
-  def matches_infinitive(translation)
+  # return indexes of russian words in sentence if translation matches to it infinitive,
+  # empty otherwise
+  def matches_infinitives(translation)
     rus_size= @rus_infinitives.length - 1
+    rus_indexes= []
 
     translation.force_encoding(Encoding::UTF_8)
     (0..rus_size).each { |i|
       unless @used_rus[i]
         if @rus_infinitives[i].include?(translation)
-          @used_rus[i]= true
-          return i
+          rus_indexes[rus_indexes.size]= Translation.new(i, translation)
         end
       end
     }
 
-    -1
+    rus_indexes
   end
 
   # try to match every english word from sentence to one russian word
@@ -275,12 +291,18 @@ class MatchTranslation
   end
 end
 
-#my_translation = MatchTranslation.new(%w(I gathered in this infographic 15 most practical advice for men who would like to always look perfectly This is a real man\'s guide to style Read remember and act),
-#                                      %w(собрал в этой инфографике 15 самых дельных советов для мужчин которые бы хотели всегда выглядеть на отлично Это настоящий гид по мужскому стилю Читайте запоминайте и действуйте))
-rus= %w(нужно использовать нескольких режимов)
-eng= %w(need to use multiple modes)
+#eng= %w(I gathered in this infographic 15 most practical advice for men who would like to always look perfectly This is a real man's guide to style Read remember and act)
+#rus= %w(собрал в этой инфографике 15 самых дельных советов для мужчин которые бы хотели всегда выглядеть на отлично Это настоящий гид по мужскому стилю Читайте запоминайте и действуйте)
+
+#rus= %w(Мы нуждаемся в использовании нескольких режимов)
+#eng= %w(We need to use several modes)
+
+rus= %w(В этой статье я вкратце расскажу вам о процессах потоках и об основах многопоточного программирования на языке Java)
+eng= %w(In this article I will briefly tell you about the processes flows and the basics of multithreaded programming in Java)
 my_translation = MatchTranslation.new(eng, rus)
+
 #words = FileParser.parse('file2.csv')
 #my_translation = MatchTranslation.new(words[1][0], words[1][1])
+
 matches = my_translation.process_sentences
 matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
