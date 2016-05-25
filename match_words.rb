@@ -1,6 +1,7 @@
 #coding utf-8
 require 'unicode'
 require 'csv'
+require 'set'
 require_relative 'multitran'
 require_relative 'file_parser'
 
@@ -37,6 +38,7 @@ end
 Translation = Struct.new(:rus_index, :translation)
 
 class MatchTranslation
+  attr_reader :part_of_speech
 
   BAD_TRANSLATION = 'bad translation'
   MIN_PROBABILITY = 0.7 #minimum probability for right translation
@@ -75,9 +77,25 @@ class MatchTranslation
     @rus_sentence = delete_endings(@rus_sentence)
 
     @all_translations = {}
-    @eng_sentence.each { |eng_word|
-      @all_translations[eng_word] = translate(eng_word)
-    }
+    # Parallel code
+    threads = []
+
+    @eng_sentence.each do |eng_word|
+      threads << Thread.new do
+        Thread.current['eng'] = eng_word
+        translations = translate(eng_word)
+        Thread.current['rus'] = translations.map { |t| t[0] }
+        Thread.current['parts_of_speech'] = translations.map { |t| t[1] }
+      end
+    end
+
+    @part_of_speech = {}
+
+    threads.each do |t|
+      t.join
+      @all_translations[t['eng']] = t['rus']
+      t['parts_of_speech'].size.times { |i| @part_of_speech[t['rus'][i]] = t['parts_of_speech'][i] }
+    end
   end
 
 
@@ -165,19 +183,22 @@ class MatchTranslation
     best= ""
     p_best= -1
     rus_index= -1
-    (0..rus_size).each { |i|
-      unless @used_rus[i]
-        sentence_word= @rus_sentence[i]
-        translations.each do |translation|
+    translations.each do |translation|
+      (0..rus_size).each { |i|
+        unless @used_rus[i]
+          sentence_word= @rus_sentence[i]
+          #puts translation
           p = calc_probability(sentence_word, delete_ending(translation))
+         # puts "p #{p} eng_word #{eng_word}  sentence_word #{sentence_word}  translation #{translation}" if p > 0.5
           if p > p_best
             p_best = p
             best = translation
             rus_index = i
           end
         end
-      end
-    }
+      }
+    end
+
 
     if p_best > MIN_PROBABILITY
       @used_rus[rus_index] = true
@@ -189,7 +210,11 @@ class MatchTranslation
 
   # returns translations of eng_word (from multitran)
   def translate(eng_word) # here call to Max's ending code
-    Multitran.translate(eng_word).map { |t| t[0] }
+    t= Multitran.translate(eng_word)
+    # @part_of_speech ||= {}
+    # t.size.times { |i| @part_of_speech[t[i][0]] = t[i][1] }
+    # puts @part_of_speech
+    # Multitran.translate(eng_word).map { |t| t[0] }
   end
 
 
@@ -229,9 +254,9 @@ class MatchTranslation
         eng_word= @eng_sentence[eng_index]
         translations= @all_translations[eng_word]
         rus_indexes= []
-        translations.each { |translation|
+        translations.each do |translation|
           rus_indexes+= matches_infinitives(translation)
-        }
+        end
         rus_indexes.uniq!
         if rus_indexes.size == 1
           updated= true
@@ -297,12 +322,45 @@ end
 #rus= %w(Мы нуждаемся в использовании нескольких режимов)
 #eng= %w(We need to use several modes)
 
-rus= %w(В этой статье я вкратце расскажу вам о процессах потоках и об основах многопоточного программирования на языке Java)
-eng= %w(In this article I will briefly tell you about the processes flows and the basics of multithreaded programming in Java)
-my_translation = MatchTranslation.new(eng, rus)
+#rus= %w(В этой статье я вкратце расскажу вам о процессах потоках и об основах многопоточного программирования на языке Java)
+#eng= %w(In this article I will briefly tell you about the processes flows and the basics of multithreaded programming in Java)
+
+#rus = %w(Номер выпуска)
+#eng = %w(Issue number)
+#my_translation = MatchTranslation.new(eng, rus)
+#matches = my_translation.process_sentences
+#matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
 
 #words = FileParser.parse('file2.csv')
 #my_translation = MatchTranslation.new(words[1][0], words[1][1])
 
-matches = my_translation.process_sentences
-matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
+# matches = my_translation.process_sentences
+# matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
+
+
+words = FileParser.parse(ARGV[0])
+abbreviations= {'сущ.' => 'C', 'прил.' => 'П', 'числ.' => 'Ч', 'мест.' => 'М', 'гл.' => 'Г', 'нареч.' => 'Н',
+               'предл.' => 'ПРЕДЛ', 'союз' => 'СОЮЗ'}
+#, '' => 'ЧАСТ', '' => 'МЕЖД', '' => 'ПРЧ', '' => 'ДПРЧ', '' => '', '' => ''
+#abbreviations["сущ."]= "C"
+
+result = Set.new
+
+start = ARGV[2].to_i
+len = ARGV[3].to_i
+
+len.times do |i|
+  break if i + start >= words.size
+  my_translation = MatchTranslation.new(words[i + start][0], words[i + start][1])
+  matches = my_translation.process_sentences
+  matches.each do |key, value|
+    p_o_s = abbreviations[my_translation.part_of_speech[value]] || 'Unk.'
+    result.add("#{key}\t#{value}\t#{p_o_s}")
+    puts "#{key}\t#{value}\t#{p_o_s}"
+  end
+  puts "Iteration #{i} done"
+end
+
+File.open(ARGV[1], 'w') do |file|
+  result.each { |elem| file.puts elem }
+end
