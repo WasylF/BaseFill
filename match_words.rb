@@ -51,14 +51,6 @@ class MatchTranslation
     rus_sentence.each { |word| word.downcase!.force_encoding(Encoding::UTF_8) }
     @eng_sentence = eng_sentence
     @rus_sentence = rus_sentence
-    # eng_sentence.downcase!
-    # rus_sentence.downcase!
-
-    # eng_sentence.force_encoding(Encoding::UTF_8)
-    # rus_sentence.force_encoding(Encoding::UTF_8)
-
-    # @eng_sentence = eng_sentence.split(' ')
-    # @rus_sentence = rus_sentence.split(' ')
 
     # TODO: add words
     @useless_eng_words = %w(a the an on in by is are am were was be been have has had to i you he she it we they)
@@ -77,25 +69,38 @@ class MatchTranslation
     @rus_sentence = delete_endings(@rus_sentence)
 
     @all_translations = {}
-    # Parallel code
-    threads = []
-
-    @eng_sentence.each do |eng_word|
-      threads << Thread.new do
-        Thread.current['eng'] = eng_word
-        translations = translate(eng_word)
-        Thread.current['rus'] = translations.map { |t| t[0] }
-        Thread.current['parts_of_speech'] = translations.map { |t| t[1] }
-      end
-    end
-
     @part_of_speech = {}
+    # Parallel code
+    eng_leng = @eng_sentence.size
+    block = 10
+    (0..eng_leng/block).each { |block_num|
 
-    threads.each do |t|
-      t.join
-      @all_translations[t['eng']] = t['rus']
-      t['parts_of_speech'].size.times { |i| @part_of_speech[t['rus'][i]] = t['parts_of_speech'][i] }
-    end
+      eng_sentence_ = []
+      (0..block-1).each { |j|
+        if block*block_num + j < eng_leng
+          eng_sentence_ << @eng_sentence[block*block_num + j]
+        end
+      }
+      threads = []
+
+      eng_sentence_.each do |eng_word|
+        threads << Thread.new do
+          Thread.current['eng'] = eng_word
+          translations = translate(eng_word)
+          Thread.current['rus'] = translations.map { |t| t[0] }
+          Thread.current['parts_of_speech'] = translations.map { |t| t[1] }
+        end
+      end
+
+
+      threads.each do |t|
+        t.join
+        @all_translations[t['eng']] = t['rus']
+        t['parts_of_speech'].size.times { |i| @part_of_speech[t['rus'][i]] = t['parts_of_speech'][i] }
+      end
+    }
+
+    puts 'all translations have been loaded!'
   end
 
 
@@ -166,9 +171,6 @@ class MatchTranslation
   def calc_probability(actual_word, translation_word)
     d = levenshtein_distance(actual_word, translation_word)
 
-    #puts "distance: #{d}"
-    #puts "length: #{actual_word.size}"
-    #puts "p: #{d * 1.0 / actual_word.size}"
     min_leng= actual_word.size < translation_word.size ? actual_word.size : translation_word.size
     p = 1.0 - d * 1.0 / min_leng
     p < 0 ? 0.0 : p
@@ -189,7 +191,6 @@ class MatchTranslation
           sentence_word= @rus_sentence[i]
           #puts translation
           p = calc_probability(sentence_word, delete_ending(translation))
-         # puts "p #{p} eng_word #{eng_word}  sentence_word #{sentence_word}  translation #{translation}" if p > 0.5
           if p > p_best
             p_best = p
             best = translation
@@ -210,11 +211,7 @@ class MatchTranslation
 
   # returns translations of eng_word (from multitran)
   def translate(eng_word) # here call to Max's ending code
-    t= Multitran.translate(eng_word)
-    # @part_of_speech ||= {}
-    # t.size.times { |i| @part_of_speech[t[i][0]] = t[i][1] }
-    # puts @part_of_speech
-    # Multitran.translate(eng_word).map { |t| t[0] }
+    Multitran.translate(eng_word)
   end
 
 
@@ -331,36 +328,3 @@ end
 #matches = my_translation.process_sentences
 #matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
 
-#words = FileParser.parse('file2.csv')
-#my_translation = MatchTranslation.new(words[1][0], words[1][1])
-
-# matches = my_translation.process_sentences
-# matches.each { |key, value| puts "eng_word: #{key}   -   rus_word: #{value}" }
-
-
-words = FileParser.parse(ARGV[0])
-abbreviations= {'сущ.' => 'C', 'прил.' => 'П', 'числ.' => 'Ч', 'мест.' => 'М', 'гл.' => 'Г', 'нареч.' => 'Н',
-               'предл.' => 'ПРЕДЛ', 'союз' => 'СОЮЗ'}
-#, '' => 'ЧАСТ', '' => 'МЕЖД', '' => 'ПРЧ', '' => 'ДПРЧ', '' => '', '' => ''
-#abbreviations["сущ."]= "C"
-
-result = Set.new
-
-start = ARGV[2].to_i
-len = ARGV[3].to_i
-
-len.times do |i|
-  break if i + start >= words.size
-  my_translation = MatchTranslation.new(words[i + start][0], words[i + start][1])
-  matches = my_translation.process_sentences
-  matches.each do |key, value|
-    p_o_s = abbreviations[my_translation.part_of_speech[value]] || 'Unk.'
-    result.add("#{key}\t#{value}\t#{p_o_s}")
-    puts "#{key}\t#{value}\t#{p_o_s}"
-  end
-  puts "Iteration #{i} done"
-end
-
-File.open(ARGV[1], 'w') do |file|
-  result.each { |elem| file.puts elem }
-end
